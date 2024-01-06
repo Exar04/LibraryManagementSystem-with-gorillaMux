@@ -1,57 +1,79 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"learningGorillamux/data"
-	"learningGorillamux/datatypes"
+	"io"
+	"learningGorillamux/database"
+	"learningGorillamux/models"
 	"net/http"
+	"time"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 func Login(w http.ResponseWriter, r *http.Request) {
-	var user datatypes.UserCredentials
 
-	err := json.NewDecoder(r.Body).Decode(&user)
+	var user models.User
+
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		fmt.Println(err)
-		http.Error(w, "Error while decoding json request body", http.StatusBadRequest)
+		http.Error(w, "Error reading request body", http.StatusBadRequest)
 		return
 	}
+	err = json.Unmarshal(body, &user)
 
-	_, exists := data.Users[user.Username]
-
-	if !exists {
+	var user_in_db models.User
+	err = database.UserCollection.FindOne(context.Background(), bson.M{"username": user.Username}).Decode(&user_in_db)
+	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("user doesn't exist"))
+		w.Write([]byte("user was not found"))
 		return
 	}
-
-	if data.Users[user.Username] == user.Password {
+	if user_in_db.Password == user.Password {
 		w.WriteHeader(http.StatusFound)
-		w.Write([]byte("Valid user"))
+		w.Write([]byte("Valid user!"))
 		return
 	}
-
-	w.Write([]byte("Invalid password"))
-
+	w.Write([]byte("wrong password"))
 }
 
 func Signup(w http.ResponseWriter, r *http.Request) {
-	var newUser datatypes.UserCredentials
+	var newUser models.User
 
-	err := json.NewDecoder(r.Body).Decode(&newUser)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Error reading request body", http.StatusBadRequest)
+		return
+	}
+	err = json.Unmarshal(body, &newUser)
 
 	if err != nil {
-		http.Error(w, "Error while decoding json request body", http.StatusBadRequest)
+		http.Error(w, "Error while unmarsheling data", http.StatusInternalServerError)
 		return
 	}
 
-	_, exists := data.Users[newUser.Username]
-	if exists {
+	existingUser := database.UserCollection.FindOne(context.Background(), bson.M{"username": newUser.Username})
+	if existingUser.Err() == nil {
 		w.Write([]byte("User already exists!"))
 		return
 	}
 
-	data.Users[newUser.Username] = newUser.Password
-	w.Write([]byte("New user created"))
+	newUserToInsertInDb := models.User{
+		Id:         primitive.NewObjectID(),
+		Username:   newUser.Username,
+		Password:   newUser.Password,
+		UserType:   newUser.UserType,
+		Created_at: time.Now(),
+	}
+	_, err = database.UserCollection.InsertOne(context.Background(), newUserToInsertInDb)
+	if err != nil {
+		panic(err)
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte(fmt.Sprintf("new user created with userId %s and password %s", newUser.Username, newUser.Password)))
+
 }

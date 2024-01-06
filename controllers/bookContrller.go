@@ -1,31 +1,32 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
-	"fmt"
 	"io"
-	"learningGorillamux/data"
-	"learningGorillamux/datatypes"
+	"learningGorillamux/database"
+	"learningGorillamux/models"
 	"net/http"
-	"strconv"
+	"time"
 
 	"github.com/gorilla/mux"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 func GetBook(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	bookIdstr := vars["bookId"]
-	bookId, err := strconv.Atoi(bookIdstr)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Bad request"))
-		return
-	}
-	RequiredBook, bookExists := data.Books[bookId]
 
-	if !bookExists {
+	var RequiredBook models.Book
+
+	id, _ := primitive.ObjectIDFromHex(bookIdstr)
+	filter := bson.M{"_id": id}
+	err := database.BookCollection.FindOne(context.Background(), filter).Decode(&RequiredBook)
+
+	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("couldn't find the book"))
+		w.Write([]byte("Book Doesn't exist"))
 		return
 	}
 
@@ -37,72 +38,88 @@ func GetBook(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetBooks(w http.ResponseWriter, r *http.Request) {
-	listOfBooks := data.Books
-	var dosk datatypes.Books
 
-	for Bid, Bname := range listOfBooks {
-		book := datatypes.Book{
-			Id:   Bid,
-			Name: Bname,
-		}
-
-		dosk.AddBooksToList(book)
+	coursor, err := database.BookCollection.Find(context.Background(), bson.D{})
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("No Books Available"))
+		return
 	}
 
-	marshaledData, err := json.Marshal(dosk)
+	var listOfBooks models.Books
 
+	for coursor.Next(context.Background()) {
+		var book models.Book
+		err := coursor.Decode(&book)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		listOfBooks.AddBookToList(book)
+	}
+
+	encData, err := json.Marshal(listOfBooks)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Error while marsheling data"))
+		w.Write([]byte("Error while marsheling the data"))
 		return
 	}
 
 	w.WriteHeader(http.StatusFound)
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(marshaledData)
-
+	w.Write(encData)
 }
 
 func DeleteBook(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	bookIdstr := vars["bookId"]
-	bookId, err := strconv.Atoi(bookIdstr)
+
+	id, _ := primitive.ObjectIDFromHex(bookIdstr)
+	filter := bson.M{"_id": id}
+	_, err := database.BookCollection.DeleteOne(context.Background(), filter)
+
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Bad request"))
-		return
-	}
-
-	_, exists := data.Books[bookId]
-	if !exists {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("Book doesn't exists"))
+		w.Write([]byte("Book Doesn't exist"))
 		return
 	}
 
-	delete(data.Books, bookId)
-	w.Write([]byte("Deleted book sucessfully!"))
+	w.Write([]byte("Successfully deleted Book!"))
 }
 
 func AddBook(w http.ResponseWriter, r *http.Request) {
-	var newBook datatypes.Book
+	var newBook models.Book
 
-	err := json.NewDecoder(r.Body).Decode(&newBook)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		fmt.Println(io.ReadAll(r.Body))
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Error while decoding"))
+		http.Error(w, "Error reading request body", http.StatusBadRequest)
+		return
+	}
+	err = json.Unmarshal(body, &newBook)
+
+	if err != nil {
+		http.Error(w, "Error while unmarsheling data", http.StatusInternalServerError)
 		return
 	}
 
-	_, exists := data.Books[newBook.Id]
-
-	if exists {
-		w.Write([]byte("book already exists"))
+	existingBook := database.BookCollection.FindOne(context.Background(), bson.M{"book_name": newBook.Book_name})
+	if existingBook.Err() == nil {
+		w.Write([]byte("User already exists!"))
 		return
 	}
 
-	data.Books[len(data.Books)+1] = newBook.Name
-	w.Write([]byte("Book added Sucessfully"))
+	newBookToAddInDb := models.Book{
+		Id:         primitive.NewObjectID(),
+		Book_name:  newBook.Book_name,
+		Author:     newBook.Author,
+		Created_at: time.Now(),
+	}
 
+	_, err = database.BookCollection.InsertOne(context.Background(), newBookToAddInDb)
+	if err != nil {
+		panic(err)
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte("New Book Added to DB"))
 }

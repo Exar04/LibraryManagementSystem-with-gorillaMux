@@ -1,13 +1,16 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
-	"learningGorillamux/data"
-	"learningGorillamux/datatypes"
+	"learningGorillamux/database"
+	"learningGorillamux/models"
 	"net/http"
-	"strconv"
+	"time"
 
 	"github.com/gorilla/mux"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 func OrderBook(w http.ResponseWriter, r *http.Request) {
@@ -20,47 +23,60 @@ func OrderBook(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Book id not provided in url"))
 		return
 	}
+	id, _ := primitive.ObjectIDFromHex(bookIdstr)
+	filter := bson.M{"_id": id}
+	BookExists := database.BookCollection.FindOne(context.Background(), filter)
+	if BookExists.Err() != nil {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("Book with this id doesn't exist"))
+		return
+	}
 
-	bookId, err := strconv.Atoi(bookIdstr)
+	order_book := models.Order{
+		Id:         primitive.NewObjectID(),
+		User_id:    username,
+		Book_id:    bookIdstr,
+		Created_at: time.Now(),
+	}
+
+	_, err := database.OrderCollection.InsertOne(context.Background(), order_book)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("Book id not provided in url"))
-		return
+		panic(err)
 	}
 
-	_, exists := data.Books[bookId]
-
-	if !exists {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("Books is not in the store"))
-		return
-	}
-
-	data.Orders[username] = append(data.Orders[username], bookId)
-	w.Write([]byte("Book ordered Successfully"))
+	w.Write([]byte("Successfully ordered book!"))
 }
 
 func ListAllOrderedBooks(w http.ResponseWriter, r *http.Request) {
 	username := r.Header.Get("username")
-
-	var listOfBooks datatypes.Books
-
-	orders := data.Orders[username]
-
-	for _, bookId := range orders {
-		book := datatypes.Book{
-			Id:   bookId,
-			Name: data.Books[bookId],
-		}
-		listOfBooks.AddBooksToList(book)
-	}
-	marsheledData, err := json.Marshal(listOfBooks)
+	////
+	coursor, err := database.OrderCollection.Find(context.Background(), bson.M{"user_id": username})
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("No Books Available"))
 		return
 	}
 
-	w.Header().Set("Content-Type", "applicatoin/json")
+	var listOfOrders models.Orders
+
+	for coursor.Next(context.Background()) {
+		var order models.Order
+		err := coursor.Decode(&order)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		listOfOrders.AddOrderToList(order)
+	}
+
+	encData, err := json.Marshal(listOfOrders)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Error while marsheling the data"))
+		return
+	}
+
 	w.WriteHeader(http.StatusFound)
-	w.Write(marsheledData)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(encData)
 }
