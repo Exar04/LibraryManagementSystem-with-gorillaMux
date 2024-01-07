@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/dgrijalva/jwt-go"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -33,8 +34,22 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if user_in_db.Password == user.Password {
+		claims := models.Claims{
+			Username: user.Username,
+			UserType: user.UserType,
+			StandardClaims: jwt.StandardClaims{
+				ExpiresAt: time.Now().Add(time.Hour * 12).Unix(),
+			},
+		}
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+		encTkn, err := token.SignedString(models.JwtKey)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
 		w.WriteHeader(http.StatusFound)
-		w.Write([]byte("Valid user!"))
+		w.Write([]byte(encTkn))
 		return
 	}
 	w.Write([]byte("wrong password"))

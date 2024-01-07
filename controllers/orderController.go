@@ -8,14 +8,25 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/dgrijalva/jwt-go"
 	"github.com/gorilla/mux"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 func OrderBook(w http.ResponseWriter, r *http.Request) {
-	username := r.Header.Get("username")
+	tokenStr := r.Header.Get("JwtToken")
+	if tokenStr == "" {
+		w.Write([]byte("User not logged In"))
+		return
+	}
+	claims := &models.Claims{}
 
+	jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
+		return models.JwtKey, nil
+	})
+
+	username := claims.Username
 	vars := mux.Vars(r)
 	bookIdstr, errbool := vars["bookId"]
 	if !errbool {
@@ -48,7 +59,17 @@ func OrderBook(w http.ResponseWriter, r *http.Request) {
 }
 
 func ListAllOrderedBooks(w http.ResponseWriter, r *http.Request) {
-	username := r.Header.Get("username")
+	tokenStr := r.Header.Get("JwtToken")
+	if tokenStr == "" {
+		w.Write([]byte("User not logged In"))
+		return
+	}
+	claims := &models.Claims{}
+
+	jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
+		return models.JwtKey, nil
+	})
+	username := claims.Username
 	////
 	coursor, err := database.OrderCollection.Find(context.Background(), bson.M{"user_id": username})
 	if err != nil {
